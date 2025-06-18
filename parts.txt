@@ -1,0 +1,2350 @@
+1. Настройка базы данных и миграций
+2. Создание моделей и отношений
+3. Разработка системы аутентификации (регистрация и авторизация)
+4. Создание контроллеров для основных функций
+5. Разработка интерфейса пользователя
+6. Реализация панели администратора
+
+# Создание миграций
+docker exec laravel-laravel-1 php artisan make:model User -m && docker exec laravel-laravel-1 php artisan make:model Request -m && docker exec laravel-laravel-1 php artisan make:model Reviews -m
+docker exec laravel-laravel-1 php artisan make:model Request -m && docker exec laravel-laravel-1 php artisan make:model Review -m
+
+# обновление миграции для модификации таблицы пользователей:
+database/migrations/2025_06_10_185734_modify_users_table.php
+
+cat > /tmp/modify_users_table.php << 'EOL'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            // Добавляем новые поля
+            $table->string('login')->unique()->after('id');
+            $table->string('tel')->after('name');
+            $table->string('role')->default('user')->after('password');
+            
+            // Переименовываем поле name в fullname
+            $table->renameColumn('name', 'fullname');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            // Возвращаем исходное состояние
+            $table->renameColumn('fullname', 'name');
+            $table->dropColumn('login');
+            $table->dropColumn('tel');
+            $table->dropColumn('role');
+        });
+    }
+};
+EOL
+
+docker cp /tmp/modify_users_table.php laravel-laravel-1:/app/database/migrations/2025_06_10_185734_modify_users_table.php
+
+
+
+
+
+
+
+
+
+
+cat > /tmp/create_requests_table.php << 'EOL'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('requests', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('user_id');
+            $table->string('cargo_type');
+            $table->decimal('weight_kg', 10, 2);
+            $table->decimal('volume_m3', 10, 2);
+            $table->string('from_address');
+            $table->string('to_address');
+            $table->date('date');
+            $table->time('time');
+            $table->string('status')->default('Новая');
+            $table->timestamps();
+            
+            // Внешний ключ
+            $table->foreign('user_id')->references('id')->on('users')->onDelete('cascade');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('requests');
+    }
+};
+EOL
+
+cat > /tmp/create_reviews_table.php << 'EOL'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('reviews', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('user_id');
+            $table->unsignedBigInteger('request_id');
+            $table->integer('rating');
+            $table->text('comment');
+            $table->timestamps();
+            
+            // Внешние ключи
+            $table->foreign('user_id')->references('id')->on('users')->onDelete('cascade');
+            $table->foreign('request_id')->references('id')->on('requests')->onDelete('cascade');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('reviews');
+    }
+};
+EOL
+
+docker cp /tmp/create_requests_table.php laravel-laravel-1:/app/database/migrations/2025_06_18_000001_create_requests_table.php
+docker cp /tmp/create_reviews_table.php laravel-laravel-1:/app/database/migrations/2025_06_18_000002_create_reviews_table.php
+
+
+# Создание моделей:
+
+app/Models/User.php
+
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens, HasFactory, Notifiable;
+
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'login',
+        'fullname',
+        'tel',
+        'email',
+        'password',
+        'role',
+    ];
+
+    /**
+     * The attributes that should be hidden for serialization.
+     *
+     * @var array<int, string>
+     */
+    protected $hidden = [
+        'password',
+    ];
+
+    /**
+     * The attributes that should be cast.
+     *
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'password' => 'hashed',
+    ];
+    
+    /**
+     * Get the requests for the user.
+     */
+    public function requests()
+    {
+        return $this->hasMany(Request::class);
+    }
+    
+    /**
+     * Get the reviews for the user.
+     */
+    public function reviews()
+    {
+        return $this->hasMany(Review::class);
+    }
+    
+    /**
+     * Check if user is admin
+     */
+    public function isAdmin()
+    {
+        return $this->role === 'admin';
+    }
+}
+
+app/Models/Request.php
+
+
+
+cat > /tmp/Request.php << 'EOL'
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Casts\Attribute;
+
+class Request extends Model
+{
+    use HasFactory;
+    
+    /**
+     * The table associated with the model.
+     *
+     * @var string
+     */
+    protected $table = 'requests';
+    
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'user_id',
+        'cargo_type',
+        'weight_kg',
+        'volume_m3',
+        'from_address',
+        'to_address',
+        'date',
+        'time',
+        'status',
+    ];
+    
+    /**
+     * The attributes that should be cast.
+     *
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+    
+    /**
+     * Get the user that owns the request.
+     */
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+    
+    /**
+     * Get the review associated with the request.
+     */
+    public function review()
+    {
+        return $this->hasOne(Review::class);
+    }
+    
+    /**
+     * Check if the request is completed.
+     */
+    public function isCompleted()
+    {
+        return $this->status === 'Завершена';
+    }
+    
+    /**
+     * Check if the request has a review.
+     */
+    public function hasReview()
+    {
+        return $this->review()->exists();
+    }
+}
+EOL
+
+docker cp /tmp/Request.php laravel-laravel-1:/app/app/Models/Request.php
+ ⋮ 
+ ↳ Purpose: Обновление модели Request для работы с датами
+
+
+
+
+cat > /tmp/Review.php << 'EOL'
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Review extends Model
+{
+    use HasFactory;
+    
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'user_id',
+        'request_id',
+        'rating',
+        'comment',
+    ];
+    
+    /**
+     * Get the user that owns the review.
+     */
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+    
+    /**
+     * Get the request that owns the review.
+     */
+    public function request()
+    {
+        return $this->belongsTo(Request::class);
+    }
+}
+EOL
+
+docker cp /tmp/Review.php laravel-laravel-1:/app/app/Models/Review.php
+ ⋮ 
+ ↳ Purpose: Обновление модели Review через Docker
+
+
+
+#Создание контроллера для аутентификации
+
+cat > /tmp/AuthController.php << 'EOL'
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Validator;
+
+class AuthController extends Controller
+{
+    /**
+     * Показать форму регистрации
+     */
+    public function showRegisterForm()
+    {
+        return view('auth.register');
+    }
+    
+    /**
+     * Обработка регистрации пользователя
+     */
+    public function register(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'login' => ['required', 'string', 'min:6', 'unique:users', 'regex:/^[А-Яа-яЁё]+$/u'],
+            'fullname' => ['required', 'string', 'regex:/^[А-Яа-яЁё\s]+$/u'],
+            'tel' => ['required', 'string', 'regex:/^\+7\(\d{3}\)-\d{3}-\d{2}-\d{2}$/'],
+            'email' => ['required', 'string', 'email', 'unique:users'],
+            'password' => ['required', 'string', 'min:6', 'confirmed'],
+        ], [
+            'login.required' => 'Поле логин обязательно для заполнения',
+            'login.min' => 'Логин должен содержать не менее 6 символов',
+            'login.unique' => 'Такой логин уже используется',
+            'login.regex' => 'Логин должен содержать только символы кириллицы',
+            'fullname.required' => 'Поле ФИО обязательно для заполнения',
+            'fullname.regex' => 'ФИО должно содержать только символы кириллицы и пробелы',
+            'tel.required' => 'Поле телефон обязательно для заполнения',
+            'tel.regex' => 'Телефон должен быть в формате +7(XXX)-XXX-XX-XX',
+            'email.required' => 'Поле email обязательно для заполнения',
+            'email.email' => 'Введите корректный email',
+            'email.unique' => 'Такой email уже используется',
+            'password.required' => 'Поле пароль обязательно для заполнения',
+            'password.min' => 'Пароль должен содержать не менее 6 символов',
+            'password.confirmed' => 'Пароли не совпадают',
+        ]);
+        
+        if ($validator->fails()) {
+            return redirect()->back()
+                ->withErrors($validator)
+                ->withInput();
+        }
+        
+        $user = User::create([
+            'login' => $request->login,
+            'fullname' => $request->fullname,
+            'tel' => $request->tel,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'role' => 'user',
+        ]);
+        
+        Auth::login($user);
+        
+        return redirect()->route('home')->with('success', 'Регистрация успешно завершена!');
+    }
+    
+    /**
+     * Показать форму авторизации
+     */
+    public function showLoginForm()
+    {
+        return view('auth.login');
+    }
+    
+    /**
+     * Обработка авторизации пользователя
+     */
+    public function login(Request $request)
+    {
+        $credentials = $request->validate([
+            'login' => ['required', 'string'],
+            'password' => ['required', 'string'],
+        ], [
+            'login.required' => 'Поле логин обязательно для заполнения',
+            'password.required' => 'Поле пароль обязательно для заполнения',
+        ]);
+        
+        if (Auth::attempt($credentials)) {
+            $request->session()->regenerate();
+            
+            return redirect()->intended(route('home'));
+        }
+        
+        return back()->withErrors([
+            'login' => 'Неверный логин или пароль',
+        ])->onlyInput('login');
+    }
+    
+    /**
+     * Выход пользователя из системы
+     */
+    public function logout(Request $request)
+    {
+        Auth::logout();
+        
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+        
+        return redirect()->route('login');
+    }
+}
+EOL
+
+docker cp /tmp/AuthController.php laravel-laravel-1:/app/app/Http/Controllers/AuthController.php
+
+
+
+
+cat > /tmp/RequestController.php << 'EOL'
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Request as CargoRequest;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Validator;
+
+class RequestController extends Controller
+{
+    /**
+     * Показать список заявок пользователя
+     */
+    public function index()
+    {
+        $requests = Auth::user()->requests()->orderBy('created_at', 'desc')->get();
+        return view('requests.index', compact('requests'));
+    }
+    
+    /**
+     * Показать форму создания заявки
+     */
+    public function create()
+    {
+        $cargoTypes = [
+            'хрупкое',
+            'скоропортящееся',
+            'требуется рефрижератор',
+            'животные',
+            'жидкость',
+            'мебель',
+            'мусор'
+        ];
+        
+        return view('requests.create', compact('cargoTypes'));
+    }
+    
+    /**
+     * Сохранить новую заявку
+     */
+    public function store(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'date' => ['required', 'date', 'after_or_equal:today'],
+            'time' => ['required'],
+            'weight_kg' => ['required', 'numeric', 'min:0'],
+            'volume_m3' => ['required', 'numeric', 'min:0'],
+            'from_address' => ['required', 'string'],
+            'to_address' => ['required', 'string'],
+            'cargo_type' => ['required', 'string'],
+        ], [
+            'date.required' => 'Поле дата обязательно для заполнения',
+            'date.date' => 'Введите корректную дату',
+            'date.after_or_equal' => 'Дата должна быть не раньше сегодняшнего дня',
+            'time.required' => 'Поле время обязательно для заполнения',
+            'weight_kg.required' => 'Поле вес груза обязательно для заполнения',
+            'weight_kg.numeric' => 'Вес груза должен быть числом',
+            'weight_kg.min' => 'Вес груза не может быть отрицательным',
+            'volume_m3.required' => 'Поле объем груза обязательно для заполнения',
+            'volume_m3.numeric' => 'Объем груза должен быть числом',
+            'volume_m3.min' => 'Объем груза не может быть отрицательным',
+            'from_address.required' => 'Поле адрес отправления обязательно для заполнения',
+            'to_address.required' => 'Поле адрес доставки обязательно для заполнения',
+            'cargo_type.required' => 'Поле тип груза обязательно для заполнения',
+        ]);
+        
+        if ($validator->fails()) {
+            return redirect()->back()
+                ->withErrors($validator)
+                ->withInput();
+        }
+        
+        $cargoRequest = new CargoRequest();
+        $cargoRequest->user_id = Auth::id();
+        $cargoRequest->date = $request->date;
+        $cargoRequest->time = $request->time;
+        $cargoRequest->weight_kg = $request->weight_kg;
+        $cargoRequest->volume_m3 = $request->volume_m3;
+        $cargoRequest->from_address = $request->from_address;
+        $cargoRequest->to_address = $request->to_address;
+        $cargoRequest->cargo_type = $request->cargo_type;
+        $cargoRequest->status = 'Новая';
+        $cargoRequest->save();
+        
+        return redirect()->route('requests.index')->with('success', 'Заявка успешно создана!');
+    }
+    
+    /**
+     * Показать детали заявки
+     */
+    public function show($id)
+    {
+        $request = CargoRequest::findOrFail($id);
+        
+        // Проверяем, принадлежит ли заявка текущему пользователю или является ли пользователь администратором
+        if ($request->user_id !== Auth::id() && !Auth::user()->isAdmin()) {
+            abort(403, 'Доступ запрещен');
+        }
+        
+        return view('requests.show', compact('request'));
+    }
+}
+EOL
+
+docker cp /tmp/RequestController.php laravel-laravel-1:/app/app/Http/Controllers/RequestController.php
+ ⋮ 
+ ↳ Purpose: Создание контроллера для заявок
+
+
+
+
+ cat > /tmp/ReviewController.php << 'EOL'
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Review;
+use App\Models\Request as CargoRequest;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Validator;
+
+class ReviewController extends Controller
+{
+    /**
+     * Показать форму создания отзыва
+     */
+    public function create($requestId)
+    {
+        $request = CargoRequest::findOrFail($requestId);
+        
+        // Проверяем, принадлежит ли заявка текущему пользователю
+        if ($request->user_id !== Auth::id()) {
+            abort(403, 'Доступ запрещен');
+        }
+        
+        // Проверяем, завершена ли заявка
+        if (!$request->isCompleted()) {
+            return redirect()->route('requests.index')->with('error', 'Вы можете оставить отзыв только для завершенных заявок');
+        }
+        
+        // Проверяем, есть ли уже отзыв для этой заявки
+        if ($request->hasReview()) {
+            return redirect()->route('requests.index')->with('error', 'Вы уже оставили отзыв для этой заявки');
+        }
+        
+        return view('reviews.create', compact('request'));
+    }
+    
+    /**
+     * Сохранить новый отзыв
+     */
+    public function store(Request $request, $requestId)
+    {
+        $cargoRequest = CargoRequest::findOrFail($requestId);
+        
+        // Проверяем, принадлежит ли заявка текущему пользователю
+        if ($cargoRequest->user_id !== Auth::id()) {
+            abort(403, 'Доступ запрещен');
+        }
+        
+        // Проверяем, завершена ли заявка
+        if (!$cargoRequest->isCompleted()) {
+            return redirect()->route('requests.index')->with('error', 'Вы можете оставить отзыв только для завершенных заявок');
+        }
+        
+        // Проверяем, есть ли уже отзыв для этой заявки
+        if ($cargoRequest->hasReview()) {
+            return redirect()->route('requests.index')->with('error', 'Вы уже оставили отзыв для этой заявки');
+        }
+        
+        $validator = Validator::make($request->all(), [
+            'rating' => ['required', 'integer', 'min:1', 'max:5'],
+            'comment' => ['required', 'string', 'min:10'],
+        ], [
+            'rating.required' => 'Поле оценка обязательно для заполнения',
+            'rating.integer' => 'Оценка должна быть целым числом',
+            'rating.min' => 'Оценка должна быть не менее 1',
+            'rating.max' => 'Оценка должна быть не более 5',
+            'comment.required' => 'Поле комментарий обязательно для заполнения',
+            'comment.min' => 'Комментарий должен содержать не менее 10 символов',
+        ]);
+        
+        if ($validator->fails()) {
+            return redirect()->back()
+                ->withErrors($validator)
+                ->withInput();
+        }
+        
+        $review = new Review();
+        $review->user_id = Auth::id();
+        $review->request_id = $requestId;
+        $review->rating = $request->rating;
+        $review->comment = $request->comment;
+        $review->save();
+        
+        return redirect()->route('requests.index')->with('success', 'Отзыв успешно добавлен!');
+    }
+}
+EOL
+
+docker cp /tmp/ReviewController.php laravel-laravel-1:/app/app/Http/Controllers/ReviewController.php
+ ⋮ 
+ ↳ Purpose: Создание контроллера для отзывов
+
+
+
+
+ cat > /tmp/AdminController.php << 'EOL'
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Request as CargoRequest;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+
+class AdminController extends Controller
+{
+    /**
+     * Конструктор
+     */
+    public function __construct()
+    {
+        $this->middleware(function ($request, $next) {
+            if (!Auth::user() || !Auth::user()->isAdmin()) {
+                abort(403, 'Доступ запрещен');
+            }
+            
+            return $next($request);
+        });
+    }
+    
+    /**
+     * Показать панель администратора
+     */
+    public function index()
+    {
+        $requests = CargoRequest::with('user')->orderBy('created_at', 'desc')->get();
+        return view('admin.index', compact('requests'));
+    }
+    
+    /**
+     * Обновить статус заявки
+     */
+    public function updateStatus(Request $request, $id)
+    {
+        $cargoRequest = CargoRequest::findOrFail($id);
+        
+        $request->validate([
+            'status' => ['required', 'string', 'in:Новая,В работе,Отменена,Завершена'],
+        ]);
+        
+        $cargoRequest->status = $request->status;
+        $cargoRequest->save();
+        
+        return redirect()->route('admin.index')->with('success', 'Статус заявки успешно обновлен!');
+    }
+    
+    /**
+     * Удалить заявку
+     */
+    public function destroy($id)
+    {
+        $cargoRequest = CargoRequest::findOrFail($id);
+        $cargoRequest->delete();
+        
+        return redirect()->route('admin.index')->with('success', 'Заявка успешно удалена!');
+    }
+}
+EOL
+
+docker cp /tmp/AdminController.php laravel-laravel-1:/app/app/Http/Controllers/AdminController.php
+ ⋮ 
+ ↳ Purpose: Создание контроллера для администратора
+
+
+
+
+
+ cat > /tmp/HomeController.php << 'EOL'
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+
+class HomeController extends Controller
+{
+    /**
+     * Показать главную страницу
+     */
+    public function index()
+    {
+        if (Auth::check()) {
+            if (Auth::user()->isAdmin()) {
+                return redirect()->route('admin.index');
+            }
+            
+            return view('home');
+        }
+        
+        return redirect()->route('login');
+    }
+}
+EOL
+
+docker cp /tmp/HomeController.php laravel-laravel-1:/app/app/Http/Controllers/HomeController.php
+ ⋮ 
+ ↳ Purpose: Создание контроллера для главной страницы
+
+
+
+#Создание маршрутов
+
+ cat > /tmp/web.php << 'EOL'
+<?php
+
+use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\HomeController;
+use App\Http\Controllers\RequestController;
+use App\Http\Controllers\ReviewController;
+use Illuminate\Support\Facades\Route;
+
+/*
+|--------------------------------------------------------------------------
+| Web Routes
+|--------------------------------------------------------------------------
+|
+| Here is where you can register web routes for your application. These
+| routes are loaded by the RouteServiceProvider and all of them will
+| be assigned to the "web" middleware group. Make something great!
+|
+*/
+
+// Главная страница
+Route::get('/', [HomeController::class, 'index'])->name('home');
+
+// Маршруты для аутентификации
+Route::middleware('guest')->group(function () {
+    // Регистрация
+    Route::get('/register', [AuthController::class, 'showRegisterForm'])->name('register');
+    Route::post('/register', [AuthController::class, 'register']);
+    
+    // Авторизация
+    Route::get('/login', [AuthController::class, 'showLoginForm'])->name('login');
+    Route::post('/login', [AuthController::class, 'login']);
+});
+
+// Маршруты для авторизованных пользователей
+Route::middleware('auth')->group(function () {
+    // Выход
+    Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+    
+    // Заявки
+    Route::get('/requests', [RequestController::class, 'index'])->name('requests.index');
+    Route::get('/requests/create', [RequestController::class, 'create'])->name('requests.create');
+    Route::post('/requests', [RequestController::class, 'store'])->name('requests.store');
+    Route::get('/requests/{id}', [RequestController::class, 'show'])->name('requests.show');
+    
+    // Отзывы
+    Route::get('/requests/{id}/reviews/create', [ReviewController::class, 'create'])->name('reviews.create');
+    Route::post('/requests/{id}/reviews', [ReviewController::class, 'store'])->name('reviews.store');
+    
+    // Панель администратора
+    Route::prefix('admin')->middleware('admin')->group(function () {
+        Route::get('/', [AdminController::class, 'index'])->name('admin.index');
+        Route::put('/requests/{id}/status', [AdminController::class, 'updateStatus'])->name('admin.requests.status');
+        Route::delete('/requests/{id}', [AdminController::class, 'destroy'])->name('admin.requests.destroy');
+    });
+});
+EOL
+
+docker cp /tmp/web.php laravel-laravel-1:/app/routes/web.php
+ ⋮ 
+ ↳ Purpose: Создание маршрутов
+
+
+
+
+
+#Создание middleware для проверки роли администратора
+
+cat > /tmp/AdminMiddleware.php << 'EOL'
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Symfony\Component\HttpFoundation\Response;
+
+class AdminMiddleware
+{
+    /**
+     * Handle an incoming request.
+     *
+     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
+     */
+    public function handle(Request $request, Closure $next): Response
+    {
+        if (!Auth::check() || !Auth::user()->isAdmin()) {
+            abort(403, 'Доступ запрещен');
+        }
+        
+        return $next($request);
+    }
+}
+EOL
+
+docker cp /tmp/AdminMiddleware.php laravel-laravel-1:/app/app/Http/Middleware/AdminMiddleware.php
+ ⋮ 
+ ↳ Purpose: Создание middleware для проверки роли администратора
+
+
+
+
+ #Обновление Kernel.php для регистрации middleware
+
+
+ cat > /tmp/Kernel.php << 'EOL'
+<?php
+
+namespace App\Http;
+
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
+
+class Kernel extends HttpKernel
+{
+    /**
+     * The application's global HTTP middleware stack.
+     *
+     * These middleware are run during every request to your application.
+     *
+     * @var array<int, class-string|string>
+     */
+    protected $middleware = [
+        // \App\Http\Middleware\TrustHosts::class,
+        \App\Http\Middleware\TrustProxies::class,
+        \Illuminate\Http\Middleware\HandleCors::class,
+        \App\Http\Middleware\PreventRequestsDuringMaintenance::class,
+        \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
+        \App\Http\Middleware\TrimStrings::class,
+        \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
+    ];
+
+    /**
+     * The application's route middleware groups.
+     *
+     * @var array<string, array<int, class-string|string>>
+     */
+    protected $middlewareGroups = [
+        'web' => [
+            \App\Http\Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
+            \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+            \App\Http\Middleware\VerifyCsrfToken::class,
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        ],
+
+        'api' => [
+            // \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \Illuminate\Routing\Middleware\ThrottleRequests::class.':api',
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        ],
+    ];
+
+    /**
+     * The application's middleware aliases.
+     *
+     * Aliases may be used instead of class names to conveniently assign middleware to routes and groups.
+     *
+     * @var array<string, class-string|string>
+     */
+    protected $middlewareAliases = [
+        'auth' => \App\Http\Middleware\Authenticate::class,
+        'auth.basic' => \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,
+        'auth.session' => \Illuminate\Session\Middleware\AuthenticateSession::class,
+        'cache.headers' => \Illuminate\Http\Middleware\SetCacheHeaders::class,
+        'can' => \Illuminate\Auth\Middleware\Authorize::class,
+        'guest' => \App\Http\Middleware\RedirectIfAuthenticated::class,
+        'password.confirm' => \Illuminate\Auth\Middleware\RequirePassword::class,
+        'precognitive' => \Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests::class,
+        'signed' => \App\Http\Middleware\ValidateSignature::class,
+        'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
+        'admin' => \App\Http\Middleware\AdminMiddleware::class,
+    ];
+}
+EOL
+
+docker cp /tmp/Kernel.php laravel-laravel-1:/app/app/Http/Kernel.php
+ ⋮ 
+ ↳ Purpose: Обновление Kernel.php для регистрации middleware
+
+
+
+
+
+ #ШАБЛОНЫ
+
+
+ mkdir -p /tmp/views/layouts
+cat > /tmp/views/layouts/app.blade.php << 'EOL'
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Грузовозофф - @yield('title', 'Главная')</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+        }
+        .navbar {
+            background-color: #343a40;
+        }
+        .navbar-brand {
+            font-weight: bold;
+            color: #ffc107 !important;
+        }
+        .footer {
+            background-color: #343a40;
+            color: white;
+            padding: 20px 0;
+            margin-top: 50px;
+        }
+        .btn-primary {
+            background-color: #0056b3;
+            border-color: #0056b3;
+        }
+        .btn-primary:hover {
+            background-color: #004494;
+            border-color: #004494;
+        }
+        .card {
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        .card-header {
+            background-color: #f1f1f1;
+            font-weight: bold;
+        }
+    </style>
+    @yield('styles')
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="{{ route('home') }}">Грузовозофф</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    @auth
+                        @if(Auth::user()->isAdmin())
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ route('admin.index') }}">Панель администратора</a>
+                            </li>
+                        @else
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ route('requests.index') }}">Мои заявки</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ route('requests.create') }}">Создать заявку</a>
+                            </li>
+                        @endif
+                    @endauth
+                </ul>
+                <ul class="navbar-nav">
+                    @guest
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ route('login') }}">Войти</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ route('register') }}">Регистрация</a>
+                        </li>
+                    @else
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                {{ Auth::user()->fullname }}
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="navbarDropdown">
+                                <li>
+                                    <form action="{{ route('logout') }}" method="POST">
+                                        @csrf
+                                        <button type="submit" class="dropdown-item">Выйти</button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </li>
+                    @endguest
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        @if(session('success'))
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                {{ session('success') }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        @endif
+
+        @if(session('error'))
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                {{ session('error') }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        @endif
+
+        @yield('content')
+    </div>
+
+    <footer class="footer mt-auto py-3">
+        <div class="container text-center">
+            <p>&copy; {{ date('Y') }} Грузовозофф. Все права защищены.</p>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    @yield('scripts')
+</body>
+</html>
+EOL
+
+docker exec -i laravel-laravel-1 mkdir -p /app/resources/views/layouts
+docker cp /tmp/views/layouts/app.blade.php laravel-laravel-1:/app/resources/views/layouts/app.blade.php
+ ⋮ 
+ ↳ Purpose: Создание основного шаблона
+
+
+
+
+
+
+
+
+
+
+
+mkdir -p /tmp/views/auth
+cat > /tmp/views/auth/login.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Вход')
+
+@section('content')
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">Вход в систему</div>
+            <div class="card-body">
+                <form method="POST" action="{{ route('login') }}">
+                    @csrf
+
+                    <div class="mb-3">
+                        <label for="login" class="form-label">Логин</label>
+                        <input type="text" class="form-control @error('login') is-invalid @enderror" id="login" name="login" value="{{ old('login') }}" required autofocus>
+                        @error('login')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Пароль</label>
+                        <input type="password" class="form-control @error('password') is-invalid @enderror" id="password" name="password" required>
+                        @error('password')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary">Войти</button>
+                    </div>
+                </form>
+                
+                <div class="mt-3 text-center">
+                    <p>Нет аккаунта? <a href="{{ route('register') }}">Зарегистрироваться</a></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+EOL
+
+cat > /tmp/views/auth/register.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Регистрация')
+
+@section('content')
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">Регистрация</div>
+            <div class="card-body">
+                <form method="POST" action="{{ route('register') }}">
+                    @csrf
+
+                    <div class="mb-3">
+                        <label for="login" class="form-label">Логин (кириллица, не менее 6 символов)</label>
+                        <input type="text" class="form-control @error('login') is-invalid @enderror" id="login" name="login" value="{{ old('login') }}" required autofocus>
+                        @error('login')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="fullname" class="form-label">ФИО (символы кириллицы и пробелы)</label>
+                        <input type="text" class="form-control @error('fullname') is-invalid @enderror" id="fullname" name="fullname" value="{{ old('fullname') }}" required>
+                        @error('fullname')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="tel" class="form-label">Телефон (в формате +7(XXX)-XXX-XX-XX)</label>
+                        <input type="text" class="form-control @error('tel') is-invalid @enderror" id="tel" name="tel" value="{{ old('tel') }}" required placeholder="+7(XXX)-XXX-XX-XX">
+                        @error('tel')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="email" class="form-label">Email</label>
+                        <input type="email" class="form-control @error('email') is-invalid @enderror" id="email" name="email" value="{{ old('email') }}" required>
+                        @error('email')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Пароль (минимум 6 символов)</label>
+                        <input type="password" class="form-control @error('password') is-invalid @enderror" id="password" name="password" required>
+                        @error('password')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="password_confirmation" class="form-label">Подтверждение пароля</label>
+                        <input type="password" class="form-control" id="password_confirmation" name="password_confirmation" required>
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary">Зарегистрироваться</button>
+                    </div>
+                </form>
+                
+                <div class="mt-3 text-center">
+                    <p>Уже есть аккаунт? <a href="{{ route('login') }}">Войти</a></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section('scripts')
+<script>
+    // Маска для телефона
+    document.getElementById('tel').addEventListener('input', function(e) {
+        let x = e.target.value.replace(/\D/g, '').match(/(\d{0,1})(\d{0,3})(\d{0,3})(\d{0,2})(\d{0,2})/);
+        if (!x[1] && x[2]) {
+            e.target.value = '+7(' + x[2] + (x[3] ? ')-' + x[3] : '');
+        } else if (x[3]) {
+            e.target.value = '+7(' + x[2] + ')-' + x[3] + (x[4] ? '-' + x[4] : '');
+        } else if (x[4]) {
+            e.target.value = '+7(' + x[2] + ')-' + x[3] + '-' + x[4] + (x[5] ? '-' + x[5] : '');
+        } else {
+            e.target.value = '+7(' + x[2] + (x[3] ? ')-' + x[3] + (x[4] ? '-' + x[4] + (x[5] ? '-' + x[5] : '') : '') : '');
+        }
+    });
+</script>
+@endsection
+@endsection
+EOL
+
+docker exec -i laravel-laravel-1 mkdir -p /app/resources/views/auth
+docker cp /tmp/views/auth/login.blade.php laravel-laravel-1:/app/resources/views/auth/login.blade.php
+docker cp /tmp/views/auth/register.blade.php laravel-laravel-1:/app/resources/views/auth/register.blade.php
+ ⋮ 
+ ↳ Purpose: Создание представлений для аутентификации
+
+
+
+
+
+
+
+
+
+
+
+mkdir -p /tmp/views
+cat > /tmp/views/home.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Главная')
+
+@section('content')
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card">
+            <div class="card-header">Добро пожаловать в систему "Грузовозофф"</div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h3>О нашей компании</h3>
+                        <p>
+                            "Грузовозофф" - это современный сервис грузоперевозок, который поможет вам быстро и безопасно доставить груз в любую точку.
+                            Мы предлагаем широкий спектр услуг по перевозке различных типов грузов: от хрупких предметов до крупногабаритной мебели.
+                        </p>
+                        <p>
+                            Наши преимущества:
+                        </p>
+                        <ul>
+                            <li>Быстрая обработка заявок</li>
+                            <li>Надежные перевозчики</li>
+                            <li>Доступные цены</li>
+                            <li>Отслеживание статуса заявки</li>
+                            <li>Возможность оставить отзыв о качестве услуг</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h3>Как это работает?</h3>
+                        <ol>
+                            <li>Зарегистрируйтесь в системе</li>
+                            <li>Создайте заявку на перевозку груза</li>
+                            <li>Дождитесь обработки заявки администратором</li>
+                            <li>Получите подтверждение и информацию о перевозке</li>
+                            <li>После завершения перевозки оставьте отзыв о качестве услуг</li>
+                        </ol>
+                        <div class="d-grid gap-2 mt-4">
+                            <a href="{{ route('requests.create') }}" class="btn btn-primary">Создать заявку</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+EOL
+
+mkdir -p /tmp/views/requests
+cat > /tmp/index.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Мои заявки')
+
+@section('content')
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Мои заявки</span>
+                <a href="{{ route('requests.create') }}" class="btn btn-sm btn-primary">Создать заявку</a>
+            </div>
+            <div class="card-body">
+                @if($requests->count() > 0)
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Дата и время</th>
+                                    <th>Тип груза</th>
+                                    <th>Откуда</th>
+                                    <th>Куда</th>
+                                    <th>Статус</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach($requests as $request)
+                                    <tr>
+                                        <td>{{ $request->id }}</td>
+                                        <td>{{ $request->date }} {{ $request->time }}</td>
+                                        <td>{{ $request->cargo_type }}</td>
+                                        <td>{{ $request->from_address }}</td>
+                                        <td>{{ $request->to_address }}</td>
+                                        <td>
+                                            @if($request->status == 'Новая')
+                                                <span class="badge bg-info">{{ $request->status }}</span>
+                                            @elseif($request->status == 'В работе')
+                                                <span class="badge bg-warning">{{ $request->status }}</span>
+                                            @elseif($request->status == 'Завершена')
+                                                <span class="badge bg-success">{{ $request->status }}</span>
+                                            @elseif($request->status == 'Отменена')
+                                                <span class="badge bg-danger">{{ $request->status }}</span>
+                                            @endif
+                                        </td>
+                                        <td>
+                                            <a href="{{ route('requests.show', $request->id) }}" class="btn btn-sm btn-info">Подробнее</a>
+                                            @if($request->status == 'Завершена' && !$request->hasReview())
+                                                <a href="{{ route('reviews.create', $request->id) }}" class="btn btn-sm btn-success">Оставить отзыв</a>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                @else
+                    <div class="alert alert-info">
+                        У вас пока нет заявок. <a href="{{ route('requests.create') }}">Создать заявку</a>
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+EOL
+
+cat > /tmp/views/requests/create.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Создание заявки')
+
+@section('content')
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">Создание заявки на перевозку груза</div>
+            <div class="card-body">
+                <form method="POST" action="{{ route('requests.store') }}">
+                    @csrf
+
+                    <div class="mb-3">
+                        <label for="date" class="form-label">Дата перевозки</label>
+                        <input type="date" class="form-control @error('date') is-invalid @enderror" id="date" name="date" value="{{ old('date') }}" required min="{{ date('Y-m-d') }}">
+                        @error('date')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="time" class="form-label">Время перевозки</label>
+                        <input type="time" class="form-control @error('time') is-invalid @enderror" id="time" name="time" value="{{ old('time') }}" required>
+                        @error('time')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="weight_kg" class="form-label">Вес груза (кг)</label>
+                        <input type="number" step="0.01" class="form-control @error('weight_kg') is-invalid @enderror" id="weight_kg" name="weight_kg" value="{{ old('weight_kg') }}" required min="0">
+                        @error('weight_kg')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="volume_m3" class="form-label">Объем груза (м³)</label>
+                        <input type="number" step="0.01" class="form-control @error('volume_m3') is-invalid @enderror" id="volume_m3" name="volume_m3" value="{{ old('volume_m3') }}" required min="0">
+                        @error('volume_m3')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="cargo_type" class="form-label">Тип груза</label>
+                        <select class="form-select @error('cargo_type') is-invalid @enderror" id="cargo_type" name="cargo_type" required>
+                            <option value="" selected disabled>Выберите тип груза</option>
+                            @foreach($cargoTypes as $type)
+                                <option value="{{ $type }}" {{ old('cargo_type') == $type ? 'selected' : '' }}>{{ ucfirst($type) }}</option>
+                            @endforeach
+                        </select>
+                        @error('cargo_type')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="from_address" class="form-label">Адрес отправления</label>
+                        <input type="text" class="form-control @error('from_address') is-invalid @enderror" id="from_address" name="from_address" value="{{ old('from_address') }}" required>
+                        @error('from_address')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="to_address" class="form-label">Адрес доставки</label>
+                        <input type="text" class="form-control @error('to_address') is-invalid @enderror" id="to_address" name="to_address" value="{{ old('to_address') }}" required>
+                        @error('to_address')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary">Отправить заявку</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+EOL
+
+cat > /tmp/show.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Детали заявки')
+
+@section('content')
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Детали заявки #{{ $request->id }}</span>
+                <a href="{{ route('requests.index') }}" class="btn btn-sm btn-secondary">Назад к списку</a>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Статус:</div>
+                    <div class="col-md-8">
+                        @if($request->status == 'Новая')
+                            <span class="badge bg-info">{{ $request->status }}</span>
+                        @elseif($request->status == 'В работе')
+                            <span class="badge bg-warning">{{ $request->status }}</span>
+                        @elseif($request->status == 'Завершена')
+                            <span class="badge bg-success">{{ $request->status }}</span>
+                        @elseif($request->status == 'Отменена')
+                            <span class="badge bg-danger">{{ $request->status }}</span>
+                        @endif
+                    </div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Дата и время перевозки:</div>
+                    <div class="col-md-8">{{ $request->date }} {{ $request->time }}</div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Тип груза:</div>
+                    <div class="col-md-8">{{ $request->cargo_type }}</div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Вес груза:</div>
+                    <div class="col-md-8">{{ $request->weight_kg }} кг</div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Объем груза:</div>
+                    <div class="col-md-8">{{ $request->volume_m3 }} м³</div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Адрес отправления:</div>
+                    <div class="col-md-8">{{ $request->from_address }}</div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Адрес доставки:</div>
+                    <div class="col-md-8">{{ $request->to_address }}</div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-md-4 fw-bold">Дата создания заявки:</div>
+                    <div class="col-md-8">{{ $request->created_at->format('d.m.Y H:i') }}</div>
+                </div>
+                
+                @if($request->status == 'Завершена')
+                    @if($request->hasReview())
+                        <div class="alert alert-success mt-3">
+                            <h5>Ваш отзыв:</h5>
+                            <div class="mb-2">
+                                <strong>Оценка:</strong> 
+                                @for($i = 1; $i <= 5; $i++)
+                                    @if($i <= $request->review->rating)
+                                        <i class="bi bi-star-fill text-warning"></i>
+                                    @else
+                                        <i class="bi bi-star text-warning"></i>
+                                    @endif
+                                @endfor
+                                ({{ $request->review->rating }}/5)
+                            </div>
+                            <div>
+                                <strong>Комментарий:</strong> {{ $request->review->comment }}
+                            </div>
+                        </div>
+                    @else
+                        <div class="d-grid gap-2 mt-3">
+                            <a href="{{ route('reviews.create', $request->id) }}" class="btn btn-success">Оставить отзыв</a>
+                        </div>
+                    @endif
+                @endif
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+EOL
+
+docker exec -i laravel-laravel-1 mkdir -p /app/resources/views/requests
+docker cp /tmp/views/home.blade.php laravel-laravel-1:/app/resources/views/home.blade.php
+docker cp /tmp/views/requests/index.blade.php laravel-laravel-1:/app/resources/views/requests/index.blade.php
+docker cp /tmp/views/requests/create.blade.php laravel-laravel-1:/app/resources/views/requests/create.blade.php
+docker cp /tmp/views/requests/show.blade.php laravel-laravel-1:/app/resources/views/requests/show.blade.php
+ ⋮ 
+ ↳ Purpose: Создание представлений для главной страницы и заявок
+
+
+
+
+
+
+
+
+
+
+mkdir -p /tmp/views/reviews
+cat > /tmp/review_create.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Оставить отзыв')
+
+@section('content')
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">Оставить отзыв о заявке #{{ $request->id }}</div>
+            <div class="card-body">
+                <div class="mb-4">
+                    <h5>Информация о заявке:</h5>
+                    <p><strong>Дата и время перевозки:</strong> {{ $request->date }} {{ $request->time }}</p>
+                    <p><strong>Тип груза:</strong> {{ $request->cargo_type }}</p>
+                    <p><strong>Маршрут:</strong> {{ $request->from_address }} → {{ $request->to_address }}</p>
+                </div>
+                
+                <form method="POST" action="{{ route('reviews.store', $request->id) }}">
+                    @csrf
+
+                    <div class="mb-3">
+                        <label for="rating" class="form-label">Оценка</label>
+                        <div class="rating">
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="rating" id="rating1" value="1" {{ old('rating') == 1 ? 'checked' : '' }}>
+                                <label class="form-check-label" for="rating1">1</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="rating" id="rating2" value="2" {{ old('rating') == 2 ? 'checked' : '' }}>
+                                <label class="form-check-label" for="rating2">2</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="rating" id="rating3" value="3" {{ old('rating') == 3 ? 'checked' : '' }}>
+                                <label class="form-check-label" for="rating3">3</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="rating" id="rating4" value="4" {{ old('rating') == 4 ? 'checked' : '' }}>
+                                <label class="form-check-label" for="rating4">4</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="rating" id="rating5" value="5" {{ old('rating') == 5 ? 'checked' : '' }}>
+                                <label class="form-check-label" for="rating5">5</label>
+                            </div>
+                        </div>
+                        @error('rating')
+                            <div class="text-danger">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="comment" class="form-label">Комментарий</label>
+                        <textarea class="form-control @error('comment') is-invalid @enderror" id="comment" name="comment" rows="4" required>{{ old('comment') }}</textarea>
+                        @error('comment')
+                            <div class="invalid-feedback">{{ $message }}</div>
+                        @enderror
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary">Отправить отзыв</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+EOL
+
+mkdir -p /tmp/views/admin
+cat > /tmp/admin_index.blade.php << 'EOL'
+@extends('layouts.app')
+
+@section('title', 'Панель администратора')
+
+@section('styles')
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+<style>
+    .admin-panel {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    .admin-header {
+        background-color: #343a40;
+        color: white;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+    }
+    .status-badge {
+        font-size: 0.9rem;
+    }
+    .action-buttons .btn {
+        margin-right: 5px;
+    }
+</style>
+@endsection
+
+@section('content')
+<div class="admin-header">
+    <h2 class="mb-0"><i class="bi bi-gear-fill me-2"></i> Панель администратора</h2>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Управление заявками</h5>
+            </div>
+            <div class="card-body">
+                @if($requests->count() > 0)
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Пользователь</th>
+                                    <th>Дата и время</th>
+                                    <th>Тип груза</th>
+                                    <th>Маршрут</th>
+                                    <th>Статус</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach($requests as $request)
+                                    <tr>
+                                        <td>{{ $request->id }}</td>
+                                        <td>
+                                            <strong>{{ $request->user->fullname }}</strong><br>
+                                            <small>{{ $request->user->tel }}</small>
+                                        </td>
+                                        <td>{{ $request->date }}<br>{{ $request->time }}</td>
+                                        <td>
+                                            {{ $request->cargo_type }}<br>
+                                            <small>{{ $request->weight_kg }} кг, {{ $request->volume_m3 }} м³</small>
+                                        </td>
+                                        <td>
+                                            <small>От: {{ $request->from_address }}</small><br>
+                                            <small>До: {{ $request->to_address }}</small>
+                                        </td>
+                                        <td>
+                                            @if($request->status == 'Новая')
+                                                <span class="badge bg-info status-badge">{{ $request->status }}</span>
+                                            @elseif($request->status == 'В работе')
+                                                <span class="badge bg-warning status-badge">{{ $request->status }}</span>
+                                            @elseif($request->status == 'Завершена')
+                                                <span class="badge bg-success status-badge">{{ $request->status }}</span>
+                                            @elseif($request->status == 'Отменена')
+                                                <span class="badge bg-danger status-badge">{{ $request->status }}</span>
+                                            @endif
+                                        </td>
+                                        <td class="action-buttons">
+                                            <div class="mb-2">
+                                                <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#statusModal{{ $request->id }}">
+                                                    <i class="bi bi-pencil-square"></i> Статус
+                                                </button>
+                                            </div>
+                                            <form action="{{ route('admin.requests.destroy', $request->id) }}" method="POST" onsubmit="return confirm('Вы уверены, что хотите удалить эту заявку?');">
+                                                @csrf
+                                                @method('DELETE')
+                                                <button type="submit" class="btn btn-sm btn-danger">
+                                                    <i class="bi bi-trash"></i> Удалить
+                                                </button>
+                                            </form>
+                                            
+                                            <!-- Модальное окно для изменения статуса -->
+                                            <div class="modal fade" id="statusModal{{ $request->id }}" tabindex="-1" aria-labelledby="statusModalLabel{{ $request->id }}" aria-hidden="true">
+                                                <div class="modal-dialog">
+                                                    <div class="modal-content">
+                                                        <div class="modal-header">
+                                                            <h5 class="modal-title" id="statusModalLabel{{ $request->id }}">Изменить статус заявки #{{ $request->id }}</h5>
+                                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                        </div>
+                                                        <form action="{{ route('admin.requests.status', $request->id) }}" method="POST">
+                                                            @csrf
+                                                            @method('PUT')
+                                                            <div class="modal-body">
+                                                                <div class="mb-3">
+                                                                    <label for="status{{ $request->id }}" class="form-label">Статус</label>
+                                                                    <select class="form-select" id="status{{ $request->id }}" name="status">
+                                                                        <option value="Новая" {{ $request->status == 'Новая' ? 'selected' : '' }}>Новая</option>
+                                                                        <option value="В работе" {{ $request->status == 'В работе' ? 'selected' : '' }}>В работе</option>
+                                                                        <option value="Завершена" {{ $request->status == 'Завершена' ? 'selected' : '' }}>Завершена</option>
+                                                                        <option value="Отменена" {{ $request->status == 'Отменена' ? 'selected' : '' }}>Отменена</option>
+                                                                    </select>
+                                                                </div>
+                                                            </div>
+                                                            <div class="modal-footer">
+                                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                                                                <button type="submit" class="btn btn-primary">Сохранить</button>
+                                                            </div>
+                                                        </form>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                @else
+                    <div class="alert alert-info">
+                        Нет заявок для отображения.
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+EOL
+
+docker exec -i laravel-laravel-1 mkdir -p /app/resources/views/reviews
+docker exec -i laravel-laravel-1 mkdir -p /app/resources/views/admin
+docker cp /tmp/views/reviews/create.blade.php laravel-laravel-1:/app/resources/views/reviews/create.blade.php
+docker cp /tmp/views/admin/index.blade.php laravel-laravel-1:/app/resources/views/admin/index.blade.php
+ ⋮ 
+ ↳ Purpose: Создание представлений для отзывов и панели администратора
+
+
+
+
+
+
+
+
+
+
+ cat > /tmp/AdminSeeder.php << 'EOL'
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\User;
+use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
+
+class AdminSeeder extends Seeder
+{
+    /**
+     * Run the database seeds.
+     */
+    public function run(): void
+    {
+        User::create([
+            'login' => 'admin',
+            'fullname' => 'Администратор',
+            'tel' => '+7(000)-000-00-00',
+            'email' => 'admin@gruzovozoff.ru',
+            'password' => Hash::make('gruzovik2024'),
+            'role' => 'admin',
+        ]);
+    }
+}
+EOL
+
+docker cp /tmp/AdminSeeder.php laravel-laravel-1:/app/database/seeders/AdminSeeder.php
+ ⋮ 
+ ↳ Purpose: Создание сидера для администратора
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cat > /tmp/DatabaseSeeder.php << 'EOL'
+<?php
+
+namespace Database\Seeders;
+
+// use Illuminate\Database\Console\Seeds\WithoutModelEvents;
+use Illuminate\Database\Seeder;
+
+class DatabaseSeeder extends Seeder
+{
+    /**
+     * Seed the application's database.
+     */
+    public function run(): void
+    {
+        $this->call([
+            AdminSeeder::class,
+        ]);
+    }
+}
+EOL
+
+docker cp /tmp/DatabaseSeeder.php laravel-laravel-1:/app/database/seeders/DatabaseSeeder.php
+ ⋮ 
+ ↳ Purpose: Обновление DatabaseSeeder.php
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ docker exec -i laravel-laravel-1 php /app/artisan migrate:fresh --seed
+
+
+
+
+исправлены миграции
+
+
+
+cat > /tmp/User.php << 'EOL'
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens, HasFactory, Notifiable;
+
+    /**
+     * The attributes that are mass assignable.
+     *
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'login',
+        'fullname',
+        'tel',
+        'email',
+        'password',
+        'role',
+    ];
+
+    /**
+     * The attributes that should be hidden for serialization.
+     *
+     * @var array<int, string>
+     */
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
+
+    /**
+     * The attributes that should be cast.
+     *
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'email_verified_at' => 'datetime',
+        'password' => 'hashed',
+    ];
+    
+    /**
+     * Get the requests for the user.
+     */
+    public function requests()
+    {
+        return $this->hasMany(Request::class);
+    }
+    
+    /**
+     * Get the reviews for the user.
+     */
+    public function reviews()
+    {
+        return $this->hasMany(Review::class);
+    }
+    
+    /**
+     * Check if user is admin
+     */
+    public function isAdmin()
+    {
+        return $this->role === 'admin';
+    }
+}
+EOL
+
+docker cp /tmp/User.php laravel-laravel-1:/app/app/Models/User.php
+ ⋮ 
+ ↳ Purpose: Обновление модели User
+
+
+
+
+
+
+
+
+cat > /tmp/LoginUserProvider.php << 'EOL'
+<?php
+
+namespace App\Providers;
+
+use Illuminate\Auth\EloquentUserProvider;
+use Illuminate\Contracts\Auth\Authenticatable as UserContract;
+
+class LoginUserProvider extends EloquentUserProvider
+{
+    /**
+     * Retrieve a user by the given credentials.
+     *
+     * @param  array  $credentials
+     * @return \Illuminate\Contracts\Auth\Authenticatable|null
+     */
+    public function retrieveByCredentials(array $credentials)
+    {
+        if (empty($credentials) ||
+           (count($credentials) === 1 &&
+            array_key_exists('password', $credentials))) {
+            return null;
+        }
+
+        // First we will add each credential element to the query as a where clause.
+        // Then we can execute the query and, if we found a user, return it in a
+        // Eloquent User "model" that will be utilized by the Guard instances.
+        $query = $this->newModelQuery();
+
+        foreach ($credentials as $key => $value) {
+            if (is_string($value) && $key !== 'password') {
+                $query->where(function ($query) use ($key, $value) {
+                    $query->where($key, $value)
+                          ->orWhere('email', $value); // Добавляем поддержку email
+                });
+            }
+        }
+
+        return $query->first();
+    }
+
+    /**
+     * Validate a user against the given credentials.
+     *
+     * @param  \Illuminate\Contracts\Auth\Authenticatable  $user
+     * @param  array  $credentials
+     * @return bool
+     */
+    public function validateCredentials(UserContract $user, array $credentials)
+    {
+        $plain = $credentials['password'];
+
+        return $this->hasher->check($plain, $user->getAuthPassword());
+    }
+}
+EOL
+
+docker cp /tmp/LoginUserProvider.php laravel-laravel-1:/app/app/Providers/LoginUserProvider.php
+ ⋮ 
+ ↳ Purpose: Создание провайдера аутентификации для поля login
+
+
+
+
+
+
+cat > /tmp/AuthServiceProvider.php << 'EOL'
+<?php
+
+namespace App\Providers;
+
+// use Illuminate\Support\Facades\Gate;
+use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider;
+use Illuminate\Support\Facades\Auth;
+use App\Providers\LoginUserProvider;
+use Illuminate\Contracts\Hashing\Hasher;
+
+class AuthServiceProvider extends ServiceProvider
+{
+    /**
+     * The model to policy mappings for the application.
+     *
+     * @var array<class-string, class-string>
+     */
+    protected $policies = [
+        //
+    ];
+
+    /**
+     * Register any authentication / authorization services.
+     */
+    public function boot(): void
+    {
+        Auth::provider('login', function ($app, array $config) {
+            return new LoginUserProvider(
+                $app->make(Hasher::class), $config['model']
+            );
+        });
+    }
+}
+EOL
+
+docker cp /tmp/AuthServiceProvider.php laravel-laravel-1:/app/app/Providers/AuthServiceProvider.php
+ ⋮ 
+ ↳ Purpose: Обновление AuthServiceProvider
+
+
+
+
+
+
+
+cat > /tmp/auth.php << 'EOL'
+<?php
+
+return [
+
+    /*
+    |--------------------------------------------------------------------------
+    | Authentication Defaults
+    |--------------------------------------------------------------------------
+    |
+    | This option controls the default authentication "guard" and password
+    | reset options for your application. You may change these defaults
+    | as required, but they're a perfect start for most applications.
+    |
+    */
+
+    'defaults' => [
+        'guard' => 'web',
+        'passwords' => 'users',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Authentication Guards
+    |--------------------------------------------------------------------------
+    |
+    | Next, you may define every authentication guard for your application.
+    | Of course, a great default configuration has been defined for you
+    | here which uses session storage and the Eloquent user provider.
+    |
+    | All authentication drivers have a user provider. This defines how the
+    | users are actually retrieved out of your database or other storage
+    | mechanisms used by this application to persist your user's data.
+    |
+    | Supported: "session"
+    |
+    */
+
+    'guards' => [
+        'web' => [
+            'driver' => 'session',
+            'provider' => 'users',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | User Providers
+    |--------------------------------------------------------------------------
+    |
+    | All authentication drivers have a user provider. This defines how the
+    | users are actually retrieved out of your database or other storage
+    | mechanisms used by this application to persist your user's data.
+    |
+    | If you have multiple user tables or models you may configure multiple
+    | sources which represent each model / table. These sources may then
+    | be assigned to any extra authentication guards you have defined.
+    |
+    | Supported: "database", "eloquent"
+    |
+    */
+
+    'providers' => [
+        'users' => [
+            'driver' => 'login',
+            'model' => App\Models\User::class,
+        ],
+
+        // 'users' => [
+        //     'driver' => 'database',
+        //     'table' => 'users',
+        // ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Resetting Passwords
+    |--------------------------------------------------------------------------
+    |
+    | You may specify multiple password reset configurations if you have more
+    | than one user table or model in the application and you want to have
+    | separate password reset settings based on the specific user types.
+    |
+    | The expiry time is the number of minutes that each reset token will be
+    | considered valid. This security feature keeps tokens short-lived so
+    | they have less time to be guessed. You may change this as needed.
+    |
+    | The throttle setting is the number of seconds a user must wait before
+    | generating more password reset tokens. This prevents the user from
+    | quickly generating a very large amount of password reset tokens.
+    |
+    */
+
+    'passwords' => [
+        'users' => [
+            'provider' => 'users',
+            'table' => 'password_reset_tokens',
+            'expire' => 60,
+            'throttle' => 60,
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Password Confirmation Timeout
+    |--------------------------------------------------------------------------
+    |
+    | Here you may define the amount of seconds before a password confirmation
+    | times out and the user is prompted to re-enter their password via the
+    | confirmation screen. By default, the timeout lasts for three hours.
+    |
+    */
+
+    'password_timeout' => 10800,
+
+];
+EOL
+
+docker cp /tmp/auth.php laravel-laravel-1:/app/config/auth.php
+ ⋮ 
+ ↳ Purpose: Обновление конфигурации аутентификации
+
+
+
+
+
+
+
+
+
+
+
+
+
+ cat > /tmp/RedirectIfAuthenticated.php << 'EOL'
+<?php
+
+namespace App\Http\Middleware;
+
+use App\Providers\RouteServiceProvider;
+use Closure;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Symfony\Component\HttpFoundation\Response;
+
+class RedirectIfAuthenticated
+{
+    /**
+     * Handle an incoming request.
+     *
+     * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
+     */
+    public function handle(Request $request, Closure $next, string ...$guards): Response
+    {
+        $guards = empty($guards) ? [null] : $guards;
+
+        foreach ($guards as $guard) {
+            if (Auth::guard($guard)->check()) {
+                return redirect()->route('home');
+            }
+        }
+
+        return $next($request);
+    }
+}
+EOL
+
+docker cp /tmp/RedirectIfAuthenticated.php laravel-laravel-1:/app/app/Http/Middleware/RedirectIfAuthenticated.php
+ ⋮ 
+ ↳ Purpose: Обновление RedirectIfAuthenticated middleware
+
+
+
+
+
+
+
+ <script>
+    // Маска для телефона
+    document.getElementById('tel').addEventListener('input', function(e) {
+        let x = e.target.value.replace(/\D/g, '').match(/(\d{0,1})(\d{0,3})(\d{0,3})(\d{0,2})(\d{0,2})/);
+        if (x) {
+            let formatted = '';
+            if (x[2]) {
+                formatted = '+7(' + x[2];
+                if (x[3]) {
+                    formatted += ')-' + x[3];
+                    if (x[4]) {
+                        formatted += '-' + x[4];
+                        if (x[5]) {
+                            formatted += '-' + x[5];
+                        }
+                    }
+                } else {
+                    formatted += ')';
+                }
+            } else {
+                formatted = '+7(';
+            }
+            e.target.value = formatted;
+        }
+    });
+</script>
